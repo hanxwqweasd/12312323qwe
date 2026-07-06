@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  nyx-server:
+    build: .
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    environment:
+      - PORT=3000
+      - JWT_SECRET=${JWT_SECRET}
+      - DB_PATH=/app/data/nyx.db
+    volumes:
+      - nyx_data:/app/data
+
+volumes:
+  nyx_data:
