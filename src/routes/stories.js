@@ -47,4 +47,42 @@ router.get('/:id/views', (req, res) => {
   res.json({ views: rows });
 });
 
+
+router.patch('/:id', (req, res) => {
+  const story = db.prepare('SELECT * FROM stories WHERE id = ?').get(Number(req.params.id));
+  if (!story) return res.status(404).json({ error: 'Сторис не найдена' });
+  if (story.author_type === 'user' && story.author_id !== req.userId) return res.status(403).json({ error: 'Нет доступа' });
+  const { caption, privacy, closeFriends, expiresInHours } = req.body || {};
+  const sets = ['edited_at = datetime(\'now\')'];
+  const vals = [];
+  if (caption !== undefined) { sets.push('caption = ?'); vals.push(caption); }
+  if (privacy !== undefined) { sets.push('privacy = ?'); vals.push(privacy); }
+  if (closeFriends !== undefined) { sets.push('close_friends_json = ?'); vals.push(JSON.stringify(closeFriends || [])); }
+  if (expiresInHours !== undefined) { sets.push('expires_at = ?'); vals.push(new Date(Date.now() + Number(expiresInHours) * 3600000).toISOString()); }
+  vals.push(story.id);
+  db.prepare(`UPDATE stories SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+  res.json({ story: db.prepare('SELECT * FROM stories WHERE id = ?').get(story.id) });
+});
+
+router.delete('/:id', (req, res) => {
+  const story = db.prepare('SELECT * FROM stories WHERE id = ?').get(Number(req.params.id));
+  if (!story) return res.status(404).json({ error: 'Сторис не найдена' });
+  if (story.author_type === 'user' && story.author_id !== req.userId) return res.status(403).json({ error: 'Нет доступа' });
+  db.prepare('UPDATE stories SET deleted_at = datetime(\'now\') WHERE id = ?').run(story.id);
+  res.json({ ok: true });
+});
+
+router.post('/:id/archive', (req, res) => {
+  const story = db.prepare('SELECT * FROM stories WHERE id = ?').get(Number(req.params.id));
+  if (!story) return res.status(404).json({ error: 'Сторис не найдена' });
+  if (story.author_type === 'user' && story.author_id !== req.userId) return res.status(403).json({ error: 'Нет доступа' });
+  db.prepare('UPDATE stories SET archived_at = datetime(\'now\') WHERE id = ?').run(story.id);
+  res.json({ ok: true });
+});
+
+router.get('/archive/mine', (req, res) => {
+  const rows = db.prepare('SELECT * FROM stories WHERE author_type = \'user\' AND author_id = ? AND archived_at IS NOT NULL ORDER BY archived_at DESC').all(req.userId);
+  res.json({ stories: rows });
+});
+
 module.exports = router;

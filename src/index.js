@@ -6,6 +6,9 @@ const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const { Server } = require('socket.io');
+const { httpLogger, logger } = require('./infra/logger');
+const { applySecurity } = require('./infra/security');
+const { applySocketScaling } = require('./infra/socketScale');
 
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
@@ -24,16 +27,24 @@ const syncRoutes = require('./routes/sync');
 const privacyRoutes = require('./routes/privacy');
 const premiumRoutes = require('./routes/premium');
 const storyRoutes = require('./routes/stories');
+const productionRoutes = require('./routes/production');
+const filesV2Routes = require('./routes/filesV2');
+const stickerStudioRoutes = require('./routes/stickerStudio');
+const callsProductionRoutes = require('./routes/callsProduction');
+const botFatherAdvancedRoutes = require('./routes/botFatherAdvanced');
 const { attachSockets } = require('./sockets');
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+app.use(cors({ origin: process.env.CORS_ORIGIN || '*', credentials: true }));
+app.use(httpLogger());
+applySecurity(app);
+app.use(express.json({ limit: process.env.JSON_LIMIT || '2mb' }));
 
 // Статика для аватаров и медиа-вложений чатов (см. оговорку про отсутствие
 // E2E-шифрования файлов в routes/messages.js и routes/users.js).
 app.use('/avatars', express.static(path.join(__dirname, '..', 'data', 'avatars')));
 app.use('/media', express.static(path.join(__dirname, '..', 'data', 'media')));
+app.use('/media-v2', express.static(path.join(__dirname, '..', 'data', 'media-v2')));
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'nyx-server' }));
 
@@ -55,6 +66,11 @@ app.use('/sync', syncRoutes);
 app.use('/privacy', privacyRoutes);
 app.use('/premium', premiumRoutes);
 app.use('/stories', storyRoutes);
+app.use('/production', productionRoutes);
+app.use('/files-v2', filesV2Routes);
+app.use('/sticker-studio', stickerStudioRoutes);
+app.use('/calls-production', callsProductionRoutes);
+app.use('/botfather', botFatherAdvancedRoutes);
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -62,10 +78,11 @@ const io = new Server(server, {
 });
 
 app.set('io', io);
+applySocketScaling(io);
 
 attachSockets(io);
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Nyx server слушает порт ${PORT}`);
+  logger.info(`Nyx server слушает порт ${PORT}`);
 });

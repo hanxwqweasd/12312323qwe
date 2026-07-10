@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
+const { addJob, queueNames } = require('../infra/queues');
 const router = express.Router();
 router.use(requireAuth);
 
@@ -30,6 +31,13 @@ router.put('/settings/:scopeType/:scopeId', (req, res) => {
     ON CONFLICT(user_id, scope_type, scope_id) DO UPDATE SET muted_until = excluded.muted_until, sound = excluded.sound, show_preview = excluded.show_preview, mentions_only = excluded.mentions_only, updated_at = datetime('now')`)
     .run(req.userId, req.params.scopeType, req.params.scopeId, mutedUntil || null, sound, showPreview ? 1 : 0, mentionsOnly ? 1 : 0);
   res.json({ ok: true });
+});
+
+
+router.post('/test-push', async (req, res) => {
+  const { title = 'Nyx test push', body = 'Проверка production push worker', silent = false } = req.body || {};
+  const job = await addJob(queueNames.push, 'manual-test-push', { userId: req.userId, scopeType: 'global', scopeId: 'global', title, body, silent, data: { test: true } });
+  res.json({ ok: true, queued: Boolean(job), jobId: job?.id || null });
 });
 
 module.exports = router;

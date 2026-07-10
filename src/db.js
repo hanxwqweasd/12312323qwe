@@ -671,4 +671,17 @@ try {
       ('nyx_sticker_slot', 'Слот стикер-пака', 'Дополнительный пользовательский стикер-пак', 150, 'sticker', '{}')`).run();
 } catch (e) {}
 
+// Enterprise production/UI extension columns
+[
+  "ALTER TABLE stories ADD COLUMN close_friends_json TEXT",
+  "ALTER TABLE stories ADD COLUMN archived_at TEXT",
+  "ALTER TABLE stories ADD COLUMN edited_at TEXT",
+  "ALTER TABLE stories ADD COLUMN deleted_at TEXT",
+  "ALTER TABLE sticker_packs ADD COLUMN published INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE sticker_packs ADD COLUMN moderated INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE sticker_packs ADD COLUMN price_nyx INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE sticker_pack_items ADD COLUMN asset_type TEXT",
+  "ALTER TABLE sticker_pack_items ADD COLUMN video_url TEXT"
+].forEach(addColumnIfMissing);
+
 module.exports = db;

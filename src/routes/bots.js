@@ -9,6 +9,7 @@ const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { sha256, token, json, safeJsonParse, parsePaging } = require('../utils/format');
 const { isUsernameAvailable } = require('./auth');
+const { addJob, queueNames } = require('../infra/queues');
 
 const router = express.Router();
 const USERNAME_RE = /^[a-zA-Z0-9_]{4,30}$/;
@@ -47,6 +48,7 @@ function botFromToken(rawToken) {
 
 function enqueueUpdate(botId, type, payload) {
   const info = db.prepare('INSERT INTO bot_updates (bot_id, update_type, payload_json) VALUES (?, ?, ?)').run(botId, type, json(payload));
+  addJob(queueNames.botUpdates, 'deliver-bot-update', { botId, updateId: info.lastInsertRowid }).catch(() => null);
   return info.lastInsertRowid;
 }
 

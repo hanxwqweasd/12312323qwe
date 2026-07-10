@@ -1,0 +1,102 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: nyx
+      POSTGRES_USER: nyx
+      POSTGRES_PASSWORD: nyx_password
+    volumes:
+      - nyx_postgres:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - nyx_redis:/data
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: nyx_minio
+      MINIO_ROOT_PASSWORD: nyx_minio_password
+    volumes:
+      - nyx_minio:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  create-bucket:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 3;
+      mc alias set local http://minio:9000 nyx_minio nyx_minio_password;
+      mc mb -p local/nyx-media || true;
+      mc anonymous set download local/nyx-media || true;
+      "
+
+  coturn:
+    image: coturn/coturn:latest
+    command: >
+      -n --log-file=stdout --min-port=49160 --max-port=49200
+      --lt-cred-mech --realm=nyx.local
+      --user=nyx:change_me
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "49160-49200:49160-49200/udp"
+
+  api:
+    build: .
+    env_file: .env
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    ports:
+      - "3000:3000"
+    command: sh -c "npm run migrate:pg && npm start"
+
+  push-worker:
+    build: .
+    env_file: .env
+    depends_on:
+      - api
+      - redis
+    command: npm run worker:push
+
+  media-worker:
+    build: .
+    env_file: .env
+    depends_on:
+      - api
+      - redis
+    command: npm run worker:media
+
+  bot-worker:
+    build: .
+    env_file: .env
+    depends_on:
+      - api
+      - redis
+    command: npm run worker:bot-updates
+
+  backup-worker:
+    build: .
+    env_file: .env
+    depends_on:
+      - api
+      - redis
+    command: npm run worker:backups
+
+volumes:
+  nyx_postgres:
+  nyx_redis:
+  nyx_minio:
