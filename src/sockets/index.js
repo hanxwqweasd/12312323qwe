@@ -14,6 +14,8 @@ const jwt = require('jsonwebtoken');
 const db = require('../db');
 const { JWT_SECRET } = require('../middleware/auth');
 const { getOrCreateConversation, otherParticipantId } = require('../conversations');
+const { canPostToChannel, isGroupMember, isGroupMuted, isGroupBanned } = require('../utils/permissions');
+const { json } = require('../utils/format');
 
 function roomFor(userId) {
   return `user:${userId}`;
@@ -168,37 +170,77 @@ function attachSockets(io) {
       socket.leave(`channel:${channelId}`);
     });
 
-    socket.on('channel:message:send', ({ channelId, text }, ack) => {
+    socket.on('channel:message:send', ({ channelId, text, media = [], entities = [], silent = false, protectedContent = false, scheduledAt = null }, ack) => {
       try {
-        const channel = db.prepare('SELECT * FROM channels WHERE id = ?').get(channelId);
+        const channel = db.prepare('SELECT * FROM channels WHERE id = ? AND is_deleted = 0').get(Number(channelId));
         if (!channel) return ack?.({ ok: false, error: 'Канал не найден' });
-
-        // Постить в канал может только владелец — как в Telegram-каналах,
-        // где пишут админы, а подписчики только читают.
-        if (channel.owner_id !== socket.userId) {
-          return ack?.({ ok: false, error: 'Публиковать может только владелец канала' });
-        }
-        if (!text || !text.trim()) {
-          return ack?.({ ok: false, error: 'Пустое сообщение' });
-        }
-
-        const info = db
-          .prepare('INSERT INTO channel_messages (channel_id, sender_id, text) VALUES (?, ?, ?)')
-          .run(channelId, socket.userId, text.trim());
-
-        const wire = {
-          id: info.lastInsertRowid,
-          channelId,
-          text: text.trim(),
-          senderUsername: socket.username,
-          createdAt: new Date().toISOString(),
-        };
-
-        io.to(`channel:${channelId}`).emit('channel:message:new', wire);
+        if (!canPostToChannel(Number(channelId), socket.userId)) return ack?.({ ok: false, error: 'Нет права публиковать' });
+        if ((!text || !String(text).trim()) && (!Array.isArray(media) || media.length === 0)) return ack?.({ ok: false, error: 'Пустое сообщение' });
+        const isScheduled = Boolean(scheduledAt);
+        const info = db.prepare(`INSERT INTO channel_messages (channel_id, sender_id, text, media_json, entities_json, silent, protected_content, scheduled_at, published_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(Number(channelId), socket.userId, String(text || '').trim(), json(media), json(entities), silent ? 1 : 0, protectedContent || channel.protected_content ? 1 : 0, scheduledAt || null, isScheduled ? null : new Date().toISOString());
+        const wire = { id: info.lastInsertRowid, channelId: Number(channelId), text: String(text || '').trim(), media, entities, silent: Boolean(silent), senderUsername: socket.username, createdAt: new Date().toISOString(), scheduledAt };
+        if (!isScheduled) io.to(`channel:${channelId}`).emit('channel:message:new', wire);
         ack?.({ ok: true, message: wire });
       } catch (e) {
         ack?.({ ok: false, error: 'Внутренняя ошибка сервера' });
       }
+    });
+
+    socket.on('group:join', ({ groupId }) => {
+      if (isGroupMember(Number(groupId), socket.userId)) socket.join(`group:${groupId}`);
+    });
+
+    socket.on('group:leave', ({ groupId }) => socket.leave(`group:${groupId}`));
+
+    socket.on('group:message:send', ({ groupId, text, topicId = null, replyToMessageId = null, media = [], entities = [] }, ack) => {
+      try {
+        groupId = Number(groupId);
+        if (!isGroupMember(groupId, socket.userId)) return ack?.({ ok: false, error: 'Нет доступа к группе' });
+        if (isGroupBanned(groupId, socket.userId)) return ack?.({ ok: false, error: 'Вы заблокированы в группе' });
+        if (isGroupMuted(groupId, socket.userId)) return ack?.({ ok: false, error: 'Вы временно не можете писать' });
+        const group = db.prepare('SELECT * FROM groups WHERE id = ?').get(groupId);
+        if (group?.slow_mode_seconds) {
+          const last = db.prepare('SELECT created_at FROM group_messages WHERE group_id = ? AND sender_id = ? ORDER BY created_at DESC LIMIT 1').get(groupId, socket.userId);
+          if (last && Date.now() - new Date(last.created_at).getTime() < Number(group.slow_mode_seconds) * 1000) {
+            return ack?.({ ok: false, error: `Медленный режим: ${group.slow_mode_seconds} сек.` });
+          }
+        }
+        if ((!text || !String(text).trim()) && (!Array.isArray(media) || !media.length)) return ack?.({ ok: false, error: 'Пустое сообщение' });
+        const info = db.prepare('INSERT INTO group_messages (group_id, sender_id, text, topic_id, reply_to_message_id, media_json, entities_json) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run(groupId, socket.userId, String(text || '').trim(), topicId, replyToMessageId, json(media), json(entities));
+        const wire = { id: info.lastInsertRowid, groupId, senderId: socket.userId, senderUsername: socket.username, text: String(text || '').trim(), topicId, replyToMessageId, media, entities, createdAt: new Date().toISOString() };
+        io.to(`group:${groupId}`).emit('group:message:new', wire);
+        ack?.({ ok: true, message: wire });
+      } catch (e) { ack?.({ ok: false, error: 'Внутренняя ошибка сервера' }); }
+    });
+
+    // WebRTC call signaling relay for 1:1 calls. Media goes peer-to-peer; server relays only SDP/ICE.
+    socket.on('call:invite', ({ toUsername, callId, type, offer }, ack) => {
+      const peer = db.prepare('SELECT id, username FROM users WHERE username = ?').get(toUsername);
+      if (!peer) return ack?.({ ok: false, error: 'Пользователь не найден' });
+      io.to(roomFor(peer.id)).emit('call:incoming', { callId, fromUserId: socket.userId, fromUsername: socket.username, type, offer });
+      ack?.({ ok: true });
+    });
+    socket.on('call:answer', ({ toUsername, callId, answer }, ack) => {
+      const peer = db.prepare('SELECT id FROM users WHERE username = ?').get(toUsername);
+      if (peer) io.to(roomFor(peer.id)).emit('call:answer', { callId, fromUsername: socket.username, answer });
+      ack?.({ ok: true });
+    });
+    socket.on('call:ice-candidate', ({ toUsername, callId, candidate }, ack) => {
+      const peer = db.prepare('SELECT id FROM users WHERE username = ?').get(toUsername);
+      if (peer) io.to(roomFor(peer.id)).emit('call:ice-candidate', { callId, fromUsername: socket.username, candidate });
+      ack?.({ ok: true });
+    });
+    socket.on('call:decline', ({ toUsername, callId }, ack) => {
+      const peer = db.prepare('SELECT id FROM users WHERE username = ?').get(toUsername);
+      if (peer) io.to(roomFor(peer.id)).emit('call:decline', { callId, fromUsername: socket.username });
+      ack?.({ ok: true });
+    });
+    socket.on('call:end', ({ toUsername, callId }, ack) => {
+      const peer = db.prepare('SELECT id FROM users WHERE username = ?').get(toUsername);
+      if (peer) io.to(roomFor(peer.id)).emit('call:end', { callId, fromUsername: socket.username });
+      ack?.({ ok: true });
     });
   });
 }
