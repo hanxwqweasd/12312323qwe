@@ -36,6 +36,11 @@ const filesV2Routes = require('./routes/filesV2');
 const stickerStudioRoutes = require('./routes/stickerStudio');
 const callsProductionRoutes = require('./routes/callsProduction');
 const botFatherAdvancedRoutes = require('./routes/botFatherAdvanced');
+
+const supportRoutes = require('./routes/support');
+const moderationRoutes = require('./routes/moderation');
+const adminRoutes = require('./routes/admin');
+const savedItemsRoutes = require('./routes/savedItems');
 const { attachSockets } = require('./sockets');
 
 const app = express();
@@ -76,6 +81,10 @@ app.use('/files-v2', filesV2Routes);
 app.use('/sticker-studio', stickerStudioRoutes);
 app.use('/calls-production', callsProductionRoutes);
 app.use('/botfather', botFatherAdvancedRoutes);
+app.use('/support', supportRoutes);
+app.use('/moderation', moderationRoutes);
+app.use('/admin', adminRoutes);
+app.use('/saved-items', savedItemsRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

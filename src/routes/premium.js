@@ -25,6 +25,44 @@ router.post('/purchase/:productId', (req, res) => {
   res.status(201).json({ ok: true, purchaseId });
 });
 
+
+
+router.get('/wallet', (req, res) => {
+  const user = db.prepare('SELECT nyx_balance FROM users WHERE id = ?').get(req.userId);
+  const transactions = db.prepare('SELECT * FROM wallet_transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 100').all(req.userId);
+  res.json({ balance: user?.nyx_balance || 0, transactions: transactions.map((t) => ({ ...t, payload: safeJsonParse(t.payload_json, {}) })) });
+});
+
+router.post('/coins/purchase', (req, res) => {
+  const packs = {
+    starter: { amount: 500, title: 'Starter Pack' },
+    plus: { amount: 1500, title: 'Plus Pack' },
+    pro: { amount: 5000, title: 'Pro Pack' },
+  };
+  const packId = String(req.body?.packId || req.body?.pack_id || 'starter');
+  const requestedAmount = Number(req.body?.amount || 0);
+  const pack = packs[packId] || { amount: Math.max(1, Math.min(50000, requestedAmount || 500)), title: req.body?.label || 'NYX Coin Pack' };
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE users SET nyx_balance = nyx_balance + ? WHERE id = ?').run(pack.amount, req.userId);
+    const info = db.prepare(`INSERT INTO wallet_transactions (user_id, tx_type, amount, provider, provider_ref, payload_json)
+      VALUES (?, 'coin_purchase', ?, ?, ?, ?)`).run(req.userId, pack.amount, req.body?.provider || 'in_app', req.body?.providerRef || null, JSON.stringify({ packId, title: pack.title, clientPayload: req.body || {} }));
+    return info.lastInsertRowid;
+  });
+  const txId = tx();
+  const user = db.prepare('SELECT nyx_balance FROM users WHERE id = ?').get(req.userId);
+  res.status(201).json({ ok: true, transactionId: txId, credited: pack.amount, balance: user.nyx_balance });
+});
+
+router.post('/coins/ad-reward', (req, res) => {
+  const rewardId = String(req.body?.rewardId || req.body?.adUnitId || '').slice(0, 120);
+  const amount = Math.max(1, Math.min(100, Number(req.body?.amount || 5)));
+  db.prepare('UPDATE users SET nyx_balance = nyx_balance + ? WHERE id = ?').run(amount, req.userId);
+  const info = db.prepare(`INSERT INTO wallet_transactions (user_id, tx_type, amount, provider, provider_ref, payload_json)
+    VALUES (?, 'ad_reward', ?, 'admob', ?, ?)`).run(req.userId, amount, rewardId || null, JSON.stringify(req.body || {}));
+  const user = db.prepare('SELECT nyx_balance FROM users WHERE id = ?').get(req.userId);
+  res.status(201).json({ ok: true, transactionId: info.lastInsertRowid, credited: amount, balance: user.nyx_balance });
+});
+
 router.get('/purchases', (req, res) => {
   const purchases = db.prepare('SELECT * FROM premium_purchases WHERE user_id = ? ORDER BY purchased_at DESC').all(req.userId);
   res.json({ purchases });

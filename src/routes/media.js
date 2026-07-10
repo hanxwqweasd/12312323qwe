@@ -1,5 +1,5 @@
 // src/routes/media.js
-// Telegram-like media library: upload registry, file metadata, link previews,
+// Nyx media library: upload registry, file metadata, link previews,
 // cache settings, albums payload support and encrypted-media metadata storage.
 
 const express = require('express');

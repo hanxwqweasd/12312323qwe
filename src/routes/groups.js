@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { isUsernameAvailable } = require('./auth');
+const { safeJsonParse } = require('../utils/format');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -43,6 +44,9 @@ function publicGroup(row) {
     username: row.username,
     photoUrl: row.photo_url,
     memberCount: row.member_count || 0,
+    accentColor: row.accent_color,
+    welcomeText: row.welcome_text,
+    theme: safeJsonParse(row.theme_json, null),
     createdAt: row.created_at,
   };
 }
@@ -370,14 +374,14 @@ router.get('/join/:token', (req, res) => {
 
 
 
-// ── PATCH /:id/settings — Telegram-like group permissions/settings ──
+// ── PATCH /:id/settings — group permissions/settings ──
 router.patch('/:id/settings', (req, res) => {
   const groupId = Number(req.params.id);
   const group = db.prepare('SELECT * FROM groups WHERE id = ?').get(groupId);
   if (!group) return res.status(404).json({ error: 'Группа не найдена' });
   if (!isGroupAdmin(groupId, req.userId)) return res.status(403).json({ error: 'Только админы могут менять настройки' });
 
-  const allowed = ['name', 'description', 'photo_url', 'group_type', 'slow_mode_seconds', 'join_approval_required', 'protected_content', 'permissions_json', 'linked_channel_id'];
+  const allowed = ['name', 'description', 'photo_url', 'group_type', 'slow_mode_seconds', 'join_approval_required', 'protected_content', 'permissions_json', 'linked_channel_id', 'accent_color', 'welcome_text', 'theme_json'];
   const sets = [];
   const vals = [];
   for (const key of allowed) {
@@ -397,7 +401,7 @@ router.patch('/:id/settings', (req, res) => {
   res.json({ ok: true, group: publicGroup({ ...updated, member_count: db.prepare('SELECT COUNT(*) c FROM group_members WHERE group_id=?').get(groupId).c }) });
 });
 
-// ── GET /:id/topics — topics like Telegram supergroups ──
+// ── GET /:id/topics — group topics ──
 router.get('/:id/topics', (req, res) => {
   const groupId = Number(req.params.id);
   if (!isGroupMember(groupId, req.userId)) return res.status(403).json({ error: 'Вы не участник этой группы' });

@@ -783,4 +783,121 @@ try {
   "ALTER TABLE sticker_pack_items ADD COLUMN video_url TEXT"
 ].forEach(addColumnIfMissing);
 
+
+// Release backend additions: support desk, moderation, admin tooling,
+// wallet transactions, saved content and public profile/business metadata.
+[
+  "ALTER TABLE users ADD COLUMN custom_status TEXT",
+  "ALTER TABLE users ADD COLUMN hide_online INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE users ADD COLUMN deleted_at TEXT",
+  "ALTER TABLE channels ADD COLUMN accent_color TEXT",
+  "ALTER TABLE channels ADD COLUMN welcome_text TEXT",
+  "ALTER TABLE channels ADD COLUMN theme_json TEXT",
+  "ALTER TABLE groups ADD COLUMN accent_color TEXT",
+  "ALTER TABLE groups ADD COLUMN welcome_text TEXT",
+  "ALTER TABLE groups ADD COLUMN theme_json TEXT"
+].forEach(addColumnIfMissing);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS support_tickets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    assigned_to_username TEXT NOT NULL DEFAULT 'NyxDev',
+    subject TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    priority TEXT NOT NULL DEFAULT 'normal',
+    source TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS support_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id INTEGER NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
+    sender_id INTEGER REFERENCES users(id),
+    sender_username TEXT,
+    text TEXT NOT NULL,
+    attachments_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS moderation_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reporter_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    target_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    details TEXT,
+    status TEXT NOT NULL DEFAULT 'new',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    resolved_at TEXT,
+    resolved_by INTEGER REFERENCES users(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS user_blocks (
+    blocker_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    blocked_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (blocker_id, blocked_user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS hidden_content (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    target_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (user_id, target_type, target_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS app_error_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    kind TEXT,
+    message TEXT NOT NULL,
+    payload_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS wallet_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tx_type TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'completed',
+    provider TEXT,
+    provider_ref TEXT,
+    payload_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS saved_items_v2 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    item_type TEXT NOT NULL,
+    title TEXT,
+    text TEXT,
+    file_url TEXT,
+    mime_type TEXT,
+    source_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS system_broadcasts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    payload_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`);
+
+createIndexIfColumns('idx_support_tickets_user', 'support_tickets', 'user_id, updated_at');
+createIndexIfColumns('idx_support_tickets_assigned', 'support_tickets', 'assigned_to_username, status, updated_at');
+createIndexIfColumns('idx_support_messages_ticket', 'support_messages', 'ticket_id, created_at');
+createIndexIfColumns('idx_moderation_reports_status', 'moderation_reports', 'status, created_at');
+createIndexIfColumns('idx_user_blocks_blocked', 'user_blocks', 'blocked_user_id, created_at');
+createIndexIfColumns('idx_wallet_transactions_user', 'wallet_transactions', 'user_id, created_at');
+createIndexIfColumns('idx_saved_items_v2_user', 'saved_items_v2', 'user_id, created_at');
+
 module.exports = db;

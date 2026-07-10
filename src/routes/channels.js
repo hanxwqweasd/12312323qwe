@@ -1,5 +1,5 @@
 // src/routes/channels.js
-// Telegram-like channels backend: server-side channels, subscribers,
+// Nyx channels backend: server-side channels, subscribers,
 // public/private visibility, admins/rights, reactions, comments, views,
 // scheduled posts, pins, protected content and audit history.
 
@@ -55,6 +55,9 @@ function formatChannel(row, userId, includeStats = false) {
     signaturesEnabled: Boolean(row.signatures_enabled),
     defaultReactionEnabled: Boolean(row.default_reaction_enabled),
     autoDeleteSeconds: row.auto_delete_seconds,
+    accentColor: row.accent_color,
+    welcomeText: row.welcome_text,
+    theme: safeJsonParse(row.theme_json, null),
     ownerId: row.owner_id,
     isOwner: role === 'owner',
     isAdmin: role === 'owner' || role === 'admin',
@@ -187,7 +190,7 @@ router.patch('/:id', (req, res) => {
     name: 'name', description: 'description', username: 'username', photoUrl: 'photo_url', photo_url: 'photo_url',
     visibility: 'visibility', protectedContent: 'protected_content', linkedDiscussionGroupId: 'linked_discussion_group_id',
     slowMode: 'slow_mode', onlyAdminsPost: 'only_admins_post', hideMembers: 'hide_members', signaturesEnabled: 'signatures_enabled',
-    defaultReactionEnabled: 'default_reaction_enabled', autoDeleteSeconds: 'auto_delete_seconds'
+    defaultReactionEnabled: 'default_reaction_enabled', autoDeleteSeconds: 'auto_delete_seconds', accentColor: 'accent_color', welcomeText: 'welcome_text', theme: 'theme_json'
   };
   const sets = [], vals = [];
   for (const [input, column] of Object.entries(allowed)) {
@@ -204,6 +207,7 @@ router.patch('/:id', (req, res) => {
     }
     if (input === 'visibility' && !['public', 'private'].includes(value)) return res.status(400).json({ error: 'visibility должен быть public/private' });
     if (['protectedContent','onlyAdminsPost','hideMembers','signaturesEnabled','defaultReactionEnabled'].includes(input)) value = toBool(value) ? 1 : 0;
+    if (input === 'theme') value = json(value || {});
     sets.push(`${column} = ?`); vals.push(value ?? null);
   }
   if (!sets.length) return res.status(400).json({ error: 'Нет изменений' });
@@ -520,11 +524,17 @@ router.patch('/:id/settings', (req, res) => {
   const onlyAdminsPost = req.body.onlyAdminsPost ?? req.body.only_admins_post;
   const hideMembers = req.body.hideMembers ?? req.body.hide_members;
   const protectedContent = req.body.protectedContent ?? req.body.protected_content;
+  const accentColor = req.body.accentColor ?? req.body.accent_color;
+  const welcomeText = req.body.welcomeText ?? req.body.welcome_text;
+  const theme = req.body.theme;
   const sets = []; const vals = [];
   if (slowMode !== undefined) { sets.push('slow_mode = ?'); vals.push(Number(slowMode) || 0); }
   if (onlyAdminsPost !== undefined) { sets.push('only_admins_post = ?'); vals.push(toBool(onlyAdminsPost) ? 1 : 0); }
   if (hideMembers !== undefined) { sets.push('hide_members = ?'); vals.push(toBool(hideMembers) ? 1 : 0); }
   if (protectedContent !== undefined) { sets.push('protected_content = ?'); vals.push(toBool(protectedContent) ? 1 : 0); }
+  if (accentColor !== undefined) { sets.push('accent_color = ?'); vals.push(String(accentColor || '').slice(0, 32) || null); }
+  if (welcomeText !== undefined) { sets.push('welcome_text = ?'); vals.push(String(welcomeText || '').slice(0, 500) || null); }
+  if (theme !== undefined) { sets.push('theme_json = ?'); vals.push(json(theme || {})); }
   if (!sets.length) return res.status(400).json({ error: 'Нет изменений' });
   sets.push('updated_at = datetime(\'now\')'); vals.push(channel.id);
   db.prepare(`UPDATE channels SET ${sets.join(', ')} WHERE id = ?`).run(...vals);

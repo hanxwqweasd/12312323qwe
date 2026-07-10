@@ -1,5 +1,5 @@
 // src/routes/bots.js
-// Telegram-like Bot API core: bot creation, token issuing/rotation,
+// Nyx Bot API core: bot creation, token issuing/rotation,
 // /start and /help commands, command menu, webhooks, getUpdates,
 // inline keyboard payloads, callbacks, mini-app URL and group rights.
 
@@ -10,6 +10,7 @@ const { requireAuth } = require('../middleware/auth');
 const { sha256, token, json, safeJsonParse, parsePaging } = require('../utils/format');
 const { isUsernameAvailable } = require('./auth');
 const { addJob, queueNames } = require('../infra/queues');
+const { isNyxAdmin } = require('../utils/admin');
 
 const router = express.Router();
 const USERNAME_RE = /^[a-zA-Z0-9_]{4,30}$/;
@@ -69,6 +70,7 @@ router.post('/', (req, res) => {
   if (!String(username).toLowerCase().endsWith('bot')) return res.status(400).json({ error: 'Username бота должен заканчиваться на bot' });
   if (!isUsernameAvailable(username, null)) return res.status(409).json({ error: 'Username уже занят пользователем/каналом/группой' });
   if (!name || !String(name).trim()) return res.status(400).json({ error: 'Имя бота обязательно' });
+  if (isSupportBot && !isNyxAdmin(req)) return res.status(403).json({ error: 'Официального support-бота может настраивать только NyxDev' });
   const rawToken = issueToken(username);
   const info = db.prepare(`INSERT INTO bots (owner_id, username, name, description, about, token_hash, token_preview, inline_mode, mini_app_url, is_support_bot)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(req.userId, username, String(name).trim(), description || null, about || null, sha256(rawToken), `${username}:••••${rawToken.slice(-6)}`, inlineMode ? 1 : 0, miniAppUrl || null, isSupportBot ? 1 : 0);
@@ -89,6 +91,7 @@ router.post('/:id/token/rotate', (req, res) => {
 router.patch('/:id', (req, res) => {
   const bot = db.prepare('SELECT * FROM bots WHERE id = ? AND owner_id = ?').get(Number(req.params.id), req.userId);
   if (!bot) return res.status(404).json({ error: 'Бот не найден' });
+  if (bot.is_support_bot && !isNyxAdmin(req)) return res.status(403).json({ error: 'Официального support-бота может менять только NyxDev' });
   const fields = { name: 'name', description: 'description', about: 'about', inlineMode: 'inline_mode', canJoinGroups: 'can_join_groups', canReadAllGroupMessages: 'can_read_all_group_messages', paymentsEnabled: 'payments_enabled', miniAppUrl: 'mini_app_url' };
   const sets = [], vals = [];
   for (const [input, column] of Object.entries(fields)) {
@@ -159,10 +162,18 @@ router.post('/:id/incoming', (req, res) => {
   const { text, chatId, payload } = req.body || {};
   const update = { message: { chat: { id: chatId || req.userId, type: 'private' }, from: { id: req.userId }, text: text || '' }, payload };
   const updateId = enqueueUpdate(bot.id, 'message', update);
-  res.status(201).json({ ok: true, updateId });
+  let reply = null;
+  const command = String(text || '').trim().replace(/^\//, '').split(/\s+/)[0];
+  if (command) {
+    const cmd = db.prepare('SELECT * FROM bot_commands WHERE bot_id = ? AND command = ?').get(bot.id, command);
+    if (cmd) reply = { from: bot.username, text: cmd.description, createdAt: new Date().toISOString() };
+  }
+  if (!reply && String(text || '').trim() === '/start') reply = { from: bot.username, text: `Привет. Это ${bot.name}.`, createdAt: new Date().toISOString() };
+  if (!reply && String(text || '').trim() === '/help') reply = { from: bot.username, text: bot.description || 'Команды бота доступны в меню.', createdAt: new Date().toISOString() };
+  res.status(201).json({ ok: true, updateId, reply });
 });
 
-// Token API — Telegram-like surface.
+// Token API — compact external bot surface.
 router.post('/api/:token/sendMessage', express.json(), (req, res) => {
   const bot = botFromToken(req.params.token);
   if (!bot) return res.status(401).json({ ok: false, description: 'Unauthorized' });

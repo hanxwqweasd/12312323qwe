@@ -37,33 +37,59 @@ function avatarUrl(avatarPath) {
   return `/avatars/${path.basename(avatarPath)}`;
 }
 
+function getBusinessPublic(userId) {
+  const row = db.prepare('SELECT * FROM business_settings WHERE user_id = ?').get(userId);
+  if (!row) return null;
+  const hasPublicBusiness = Boolean(row.business_name || row.business_category || row.business_description || row.business_email || row.business_website || row.business_phone);
+  if (!hasPublicBusiness) return null;
+  return {
+    name: row.business_name,
+    category: row.business_category,
+    description: row.business_description,
+    email: row.business_email,
+    website: row.business_website,
+    phone: row.business_phone,
+    workingHoursEnabled: Boolean(row.working_hours_enabled),
+    workingHoursFrom: row.working_hours_from,
+    workingHoursTo: row.working_hours_to,
+    workingHoursTimezone: row.working_hours_timezone,
+    workingHoursWeekdays: row.working_hours_weekdays,
+    autoReplyEnabled: Boolean(row.auto_reply_enabled),
+    autoReplyMessage: row.auto_reply_message,
+    autoReplyDelaySeconds: row.auto_reply_delay_seconds,
+  };
+}
+
 function publicProfile(user) {
   return {
     id: user.id,
     username: user.username,
     nickname: user.nickname,
     bio: user.bio,
+    customStatus: user.custom_status,
+    hideOnline: Boolean(user.hide_online),
     avatarUrl: avatarUrl(user.avatar_path),
     isPremium: Boolean(user.is_premium),
     premiumEmoji: user.premium_emoji,
+    business: getBusinessPublic(user.id),
   };
 }
 
 /** Точный поиск по username — старт нового чата без адресной книги/телефона. */
 router.get('/lookup/:username', (req, res) => {
-  const user = db.prepare('SELECT * FROM users WHERE username = ?').get(req.params.username);
+  const user = db.prepare('SELECT * FROM users WHERE username = ? AND deleted_at IS NULL').get(req.params.username);
   if (!user) return res.status(404).json({ error: 'Пользователь не найден' });
   res.json({ ...publicProfile(user), boxPublicKey: user.box_public_key });
 });
 
 router.get('/me', (req, res) => {
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.userId);
+  const user = db.prepare('SELECT * FROM users WHERE id = ? AND deleted_at IS NULL').get(req.userId);
   res.json({ user: { ...publicProfile(user), nyxBalance: user.nyx_balance, referralCode: user.referral_code } });
 });
 
 /** Смена никнейма, статуса (bio) и premium-оформления — не влияет на username/переписки. */
 router.patch('/me', (req, res) => {
-  const { nickname, bio, isPremium, premiumEmoji } = req.body || {};
+  const { nickname, bio, customStatus, hideOnline, isPremium, premiumEmoji } = req.body || {};
 
   if (nickname !== undefined) {
     if (!nickname.trim() || nickname.trim().length > 40) {
@@ -75,18 +101,24 @@ router.patch('/me', (req, res) => {
     if (bio.length > 200) return res.status(400).json({ error: 'Статус: до 200 символов' });
     db.prepare('UPDATE users SET bio = ? WHERE id = ?').run(bio, req.userId);
   }
+
+  if (customStatus !== undefined) {
+    const value = String(customStatus || '').slice(0, 80);
+    db.prepare('UPDATE users SET custom_status = ? WHERE id = ?').run(value || null, req.userId);
+  }
+  if (hideOnline !== undefined) {
+    db.prepare('UPDATE users SET hide_online = ? WHERE id = ?').run(hideOnline ? 1 : 0, req.userId);
+  }
+
   if (isPremium !== undefined) {
-    // ВАЖНО: здесь нет реальной оплаты — это демо-переключатель, чтобы можно
-    // было протестировать premium-оформление (золотое кольцо аватара,
-    // эмодзi статуса). Настоящий продукт должен проверять реальную покупку
-    // (App Store/Play Billing или Stripe) перед установкой этого флага.
+    // Premium-флаг разрешён только для совместимости старых клиентов; основной путь — /premium/purchase.
     db.prepare('UPDATE users SET is_premium = ? WHERE id = ?').run(isPremium ? 1 : 0, req.userId);
   }
   if (premiumEmoji !== undefined) {
     db.prepare('UPDATE users SET premium_emoji = ? WHERE id = ?').run(premiumEmoji, req.userId);
   }
 
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.userId);
+  const user = db.prepare('SELECT * FROM users WHERE id = ? AND deleted_at IS NULL').get(req.userId);
   res.json({ user: publicProfile(user) });
 });
 
@@ -109,7 +141,7 @@ router.patch('/me/username', (req, res) => {
   }
 
   db.prepare('UPDATE users SET username = ? WHERE id = ?').run(username, req.userId);
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.userId);
+  const user = db.prepare('SELECT * FROM users WHERE id = ? AND deleted_at IS NULL').get(req.userId);
   res.json({ user: publicProfile(user) });
 });
 
@@ -128,6 +160,24 @@ router.post('/me/avatar', (req, res) => {
 
     res.json({ avatarUrl: avatarUrl(req.file.filename) });
   });
+});
+
+
+router.post('/me/delete', (req, res) => {
+  const confirm = String(req.body?.confirm || '').toUpperCase();
+  if (confirm !== 'DELETE' && confirm !== 'УДАЛИТЬ') return res.status(400).json({ error: 'Для удаления отправьте confirm: DELETE' });
+  const user = db.prepare('SELECT * FROM users WHERE id = ? AND deleted_at IS NULL').get(req.userId);
+  if (!user) return res.status(404).json({ error: 'Пользователь не найден' });
+  const replacement = `deleted_${user.id}_${Date.now()}`;
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE users SET username = ?, nickname = ?, bio = NULL, custom_status = NULL, avatar_path = NULL, deleted_at = datetime(\'now\') WHERE id = ?').run(replacement, 'Deleted account', user.id);
+    db.prepare('DELETE FROM push_tokens WHERE user_id = ?').run(user.id);
+    db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(user.id);
+    db.prepare('DELETE FROM user_blocks WHERE blocker_id = ? OR blocked_user_id = ?').run(user.id, user.id);
+    db.prepare('UPDATE support_tickets SET status = CASE WHEN status = \'closed\' THEN status ELSE \'closed\' END, updated_at = datetime(\'now\') WHERE user_id = ?').run(user.id);
+  });
+  tx();
+  res.json({ ok: true });
 });
 
 module.exports = router;
