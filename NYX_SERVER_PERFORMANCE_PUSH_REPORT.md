@@ -9,9 +9,9 @@
 - Добавлен graceful shutdown для API, Redis, PostgreSQL pool.
 - Добавлен SQLite maintenance scheduler: `PRAGMA optimize` и WAL checkpoint.
 - Добавлены not found/error middleware с requestId.
-- Dockerfile переведён на `npm ci --omit=dev`, добавлен healthcheck.
+- Dockerfile исправлен: используется `npm install --omit=dev --no-audit --no-fund --prefer-online`, добавлен healthcheck.
 - Удалён `.env`, добавлен `.env.example`, `.gitignore`, `.dockerignore`, `.npmrc`.
-- Убраны внутренние OpenAI registry-ссылки из package-lock.json.
+- Удалён устаревший `package-lock.json`, который был не синхронизирован с production-зависимостями.
 - Добавлен nginx reverse proxy config с websocket support.
 - Добавлен PM2 ecosystem для cluster mode.
 - Добавлены scripts: syntax check, healthcheck, sqlite backup, postgres backup/restore.
@@ -21,7 +21,7 @@
 Проверки:
 
 - `npm run check:syntax` — passed, 49 JS files.
-- `package.json` / `package-lock.json` — валидный JSON.
+- `package.json` — валидный JSON; `package-lock.json` намеренно удалён до генерации нового lock-файла.
 - `.env` не включён.
 - Внутренних registry-ссылок нет.
 
