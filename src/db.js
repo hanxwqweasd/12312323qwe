@@ -75,8 +75,6 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
-  CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at);
-
   -- Каналы — открытое вещание (НЕ E2E, в отличие от личных сообщений выше).
   -- Это сознательное решение: настоящее сквозное шифрование для broadcast
   -- одному сообщению на N произвольных подписчиков требует протокола вроде
@@ -104,8 +102,6 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
-  CREATE INDEX IF NOT EXISTS idx_channel_messages ON channel_messages(channel_id, created_at);
-
   -- Маркетплейс юзернеймов: продавец выставляет СВОБОДНЫЙ (никем не занятый
   -- как активный username) "красивый" юзернейм на продажу; покупатель платит
   -- NYX и получает listed_username как свой новый активный username.
@@ -119,11 +115,6 @@ db.exec(`
     status TEXT NOT NULL DEFAULT 'active', -- 'active' | 'sold' | 'cancelled'
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
-
-  -- Гарантирует не более одного АКТИВНОГО листинга на одну и ту же строку
-  -- юзернейма одновременно (частичный уникальный индекс — поддерживается SQLite).
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_active_listing_username
-    ON username_listings(listed_username) WHERE status = 'active';
 
   CREATE TABLE IF NOT EXISTS message_reactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -227,8 +218,6 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
-  CREATE INDEX IF NOT EXISTS idx_group_messages ON group_messages(group_id, created_at);
-
   CREATE TABLE IF NOT EXISTS group_invites (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
@@ -293,6 +282,49 @@ function addColumnIfMissing(sql) {
   try { db.exec(sql); } catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
 }
 
+function tableColumns(tableName) {
+  try {
+    return new Set(db.prepare(`PRAGMA table_info(${tableName})`).all().map((row) => row.name));
+  } catch (e) {
+    return new Set();
+  }
+}
+
+function tableHasColumns(tableName, columns) {
+  const existing = tableColumns(tableName);
+  return columns.every((column) => existing.has(column));
+}
+
+function createIndexIfColumns(indexName, tableName, columnsSql, requiredColumns = null, whereSql = '') {
+  const required = requiredColumns || columnsSql
+    .split(',')
+    .map((value) => value.trim().split(/\s+/)[0])
+    .filter(Boolean);
+  if (!tableHasColumns(tableName, required)) {
+    return;
+  }
+  const where = whereSql ? ` ${whereSql}` : '';
+  db.exec(`CREATE INDEX IF NOT EXISTS ${indexName} ON ${tableName}(${columnsSql})${where}`);
+}
+
+function createUniqueIndexIfColumns(indexName, tableName, columnsSql, requiredColumns = null, whereSql = '') {
+  const required = requiredColumns || columnsSql
+    .split(',')
+    .map((value) => value.trim().split(/\s+/)[0])
+    .filter(Boolean);
+  if (!tableHasColumns(tableName, required)) {
+    return;
+  }
+  const where = whereSql ? ` ${whereSql}` : '';
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ${indexName} ON ${tableName}(${columnsSql})${where}`);
+}
+
+function backfillMissingTimestamp(tableName, columnName) {
+  if (tableHasColumns(tableName, [columnName])) {
+    try { db.exec(`UPDATE ${tableName} SET ${columnName} = datetime('now') WHERE ${columnName} IS NULL`); } catch (e) {}
+  }
+}
+
 [
   "ALTER TABLE channels ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'",
   "ALTER TABLE channels ADD COLUMN protected_content INTEGER NOT NULL DEFAULT 0",
@@ -329,8 +361,29 @@ function addColumnIfMissing(sql) {
   "ALTER TABLE user_sessions ADD COLUMN push_token TEXT",
   "ALTER TABLE user_sessions ADD COLUMN app_version TEXT",
   "ALTER TABLE user_sessions ADD COLUMN ip_hash TEXT",
-  "ALTER TABLE user_sessions ADD COLUMN revoked_at TEXT"
+  "ALTER TABLE user_sessions ADD COLUMN revoked_at TEXT",
+  "ALTER TABLE users ADD COLUMN created_at TEXT",
+  "ALTER TABLE conversations ADD COLUMN created_at TEXT",
+  "ALTER TABLE messages ADD COLUMN created_at TEXT",
+  "ALTER TABLE channels ADD COLUMN created_at TEXT",
+  "ALTER TABLE channel_messages ADD COLUMN created_at TEXT",
+  "ALTER TABLE group_messages ADD COLUMN created_at TEXT",
+  "ALTER TABLE group_members ADD COLUMN joined_at TEXT",
+  "ALTER TABLE user_sessions ADD COLUMN created_at TEXT",
+  "ALTER TABLE user_sessions ADD COLUMN last_active TEXT"
 ].forEach(addColumnIfMissing);
+
+[
+  ['users', 'created_at'],
+  ['conversations', 'created_at'],
+  ['messages', 'created_at'],
+  ['channels', 'created_at'],
+  ['channel_messages', 'created_at'],
+  ['group_messages', 'created_at'],
+  ['group_members', 'joined_at'],
+  ['user_sessions', 'created_at'],
+  ['user_sessions', 'last_active']
+].forEach(([table, column]) => backfillMissingTimestamp(table, column));
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS channel_admin_rights (
@@ -660,43 +713,53 @@ db.exec(`
     expires_at TEXT
   );
 
-  CREATE INDEX IF NOT EXISTS idx_channel_post_views_message ON channel_post_views(message_id);
-  CREATE INDEX IF NOT EXISTS idx_channel_post_reactions_message ON channel_post_reactions(message_id);
-  CREATE INDEX IF NOT EXISTS idx_channel_comments_message ON channel_post_comments(message_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_bots_owner ON bots(owner_id);
-  CREATE INDEX IF NOT EXISTS idx_bot_updates_pending ON bot_updates(bot_id, delivered, id);
-  CREATE INDEX IF NOT EXISTS idx_media_owner ON media_files(owner_id, created_at);
-
-  -- Performance indexes for release/production fallback SQLite mode.
-  CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-  CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at);
-  CREATE INDEX IF NOT EXISTS idx_conversations_user_a ON conversations(user_a_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_conversations_user_b ON conversations(user_b_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_messages_sender_created ON messages(sender_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_messages_type_created ON messages(message_type, created_at);
-  CREATE INDEX IF NOT EXISTS idx_channels_owner ON channels(owner_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_channels_username ON channels(username);
-  CREATE INDEX IF NOT EXISTS idx_channels_public ON channels(visibility, created_at);
-  CREATE INDEX IF NOT EXISTS idx_channel_subscriptions_user ON channel_subscriptions(user_id, subscribed_at);
-  CREATE INDEX IF NOT EXISTS idx_channel_messages_sender ON channel_messages(sender_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_channel_admins_user ON channel_admins(user_id);
-  CREATE INDEX IF NOT EXISTS idx_channel_bans_user ON channel_bans(user_id, banned_until);
-  CREATE INDEX IF NOT EXISTS idx_channel_join_requests_channel ON channel_join_requests(channel_id, status, created_at);
-  CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id, joined_at);
-  CREATE INDEX IF NOT EXISTS idx_group_messages_sender ON group_messages(sender_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_group_topics_group ON group_topics(group_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_group_bans_user ON group_bans(user_id, banned_until);
-  CREATE INDEX IF NOT EXISTS idx_group_mutes_user ON group_mutes(user_id, muted_until);
-  CREATE INDEX IF NOT EXISTS idx_group_join_requests_group ON group_join_requests(group_id, status, created_at);
-  CREATE INDEX IF NOT EXISTS idx_group_message_reactions_message ON group_message_reactions(message_id);
-  CREATE INDEX IF NOT EXISTS idx_user_sessions_user_active ON user_sessions(user_id, revoked_at, last_active);
-  CREATE INDEX IF NOT EXISTS idx_push_tokens_user ON push_tokens(user_id, platform);
-  CREATE INDEX IF NOT EXISTS idx_notification_settings_user_scope ON notification_settings(user_id, scope_type, scope_id);
-  CREATE INDEX IF NOT EXISTS idx_saved_items_user ON user_saved_items(user_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_stories_author_created ON stories(author_type, author_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_story_views_user ON story_views(user_id, viewed_at);
-  CREATE INDEX IF NOT EXISTS idx_premium_purchases_user ON premium_purchases(user_id, status, purchased_at);
 `);
+
+createUniqueIndexIfColumns('idx_active_listing_username', 'username_listings', 'listed_username', ['listed_username', 'status'], "WHERE status = 'active'");
+
+// Safe index creation for old SQLite volumes.
+// The server may boot with a database created by older Nyx builds where some
+// columns do not exist yet. Indexes are created only when all referenced columns
+// are present, so startup never crashes on legacy data.
+createIndexIfColumns('idx_channel_post_views_message', 'channel_post_views', 'message_id');
+createIndexIfColumns('idx_channel_post_reactions_message', 'channel_post_reactions', 'message_id');
+createIndexIfColumns('idx_channel_comments_message', 'channel_post_comments', 'message_id, created_at');
+createIndexIfColumns('idx_bots_owner', 'bots', 'owner_id');
+createIndexIfColumns('idx_bot_updates_pending', 'bot_updates', 'bot_id, delivered, id');
+createIndexIfColumns('idx_media_owner', 'media_files', 'owner_id, created_at');
+
+createIndexIfColumns('idx_users_username', 'users', 'username');
+createIndexIfColumns('idx_users_created_at', 'users', 'created_at');
+createIndexIfColumns('idx_conversations_user_a', 'conversations', 'user_a_id, created_at');
+createIndexIfColumns('idx_conversations_user_b', 'conversations', 'user_b_id, created_at');
+createIndexIfColumns('idx_messages_conversation', 'messages', 'conversation_id, created_at');
+createIndexIfColumns('idx_messages_sender_created', 'messages', 'sender_id, created_at');
+createIndexIfColumns('idx_messages_type_created', 'messages', 'message_type, created_at');
+createIndexIfColumns('idx_channels_owner', 'channels', 'owner_id, created_at');
+createIndexIfColumns('idx_channels_username', 'channels', 'username');
+createIndexIfColumns('idx_channels_public', 'channels', 'visibility, created_at');
+createIndexIfColumns('idx_channel_subscriptions_user', 'channel_subscriptions', 'user_id, subscribed_at');
+createIndexIfColumns('idx_channel_messages', 'channel_messages', 'channel_id, created_at');
+createIndexIfColumns('idx_channel_messages_sender', 'channel_messages', 'sender_id, created_at');
+createIndexIfColumns('idx_channel_admins_user', 'channel_admins', 'user_id');
+createIndexIfColumns('idx_channel_bans_user', 'channel_bans', 'user_id, banned_until');
+createIndexIfColumns('idx_channel_join_requests_channel', 'channel_join_requests', 'channel_id, status, created_at');
+createIndexIfColumns('idx_group_members_user', 'group_members', 'user_id, joined_at');
+createIndexIfColumns('idx_group_messages', 'group_messages', 'group_id, created_at');
+createIndexIfColumns('idx_group_messages_sender', 'group_messages', 'sender_id, created_at');
+createIndexIfColumns('idx_group_topics_group', 'group_topics', 'group_id, created_at');
+createIndexIfColumns('idx_group_bans_user', 'group_bans', 'user_id, banned_until');
+createIndexIfColumns('idx_group_mutes_user', 'group_mutes', 'user_id, muted_until');
+createIndexIfColumns('idx_group_join_requests_group', 'group_join_requests', 'group_id, status, created_at');
+createIndexIfColumns('idx_group_message_reactions_message', 'group_message_reactions', 'message_id');
+createIndexIfColumns('idx_user_sessions_user_active', 'user_sessions', 'user_id, revoked_at, last_active');
+createIndexIfColumns('idx_push_tokens_user', 'push_tokens', 'user_id, platform');
+createIndexIfColumns('idx_notification_settings_user_scope', 'notification_settings', 'user_id, scope_type, scope_id');
+createIndexIfColumns('idx_saved_items_user', 'user_saved_items', 'user_id, created_at');
+createIndexIfColumns('idx_stories_author_created', 'stories', 'author_type, author_id, created_at');
+createIndexIfColumns('idx_story_views_user', 'story_views', 'user_id, viewed_at');
+createIndexIfColumns('idx_premium_purchases_user', 'premium_purchases', 'user_id, status, purchased_at');
+
 
 // Ensure Nyx Support bot product/catalog rows exist without requiring manual SQL.
 try {
