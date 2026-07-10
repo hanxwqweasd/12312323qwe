@@ -19,6 +19,11 @@ require('fs').mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
+db.pragma('synchronous = NORMAL');
+db.pragma('foreign_keys = ON');
+db.pragma('busy_timeout = 5000');
+db.pragma('temp_store = MEMORY');
+db.pragma('cache_size = -64000');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -660,6 +665,36 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_bots_owner ON bots(owner_id);
   CREATE INDEX IF NOT EXISTS idx_bot_updates_pending ON bot_updates(bot_id, delivered, id);
   CREATE INDEX IF NOT EXISTS idx_media_owner ON media_files(owner_id, created_at);
+
+  -- Performance indexes for release/production fallback SQLite mode.
+  CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+  CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at);
+  CREATE INDEX IF NOT EXISTS idx_conversations_user_a ON conversations(user_a_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_conversations_user_b ON conversations(user_b_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_messages_sender_created ON messages(sender_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_messages_type_created ON messages(message_type, created_at);
+  CREATE INDEX IF NOT EXISTS idx_channels_owner ON channels(owner_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_channels_username ON channels(username);
+  CREATE INDEX IF NOT EXISTS idx_channels_public ON channels(is_public, created_at);
+  CREATE INDEX IF NOT EXISTS idx_channel_subscriptions_user ON channel_subscriptions(user_id, subscribed_at);
+  CREATE INDEX IF NOT EXISTS idx_channel_messages_sender ON channel_messages(sender_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_channel_admins_user ON channel_admins(user_id);
+  CREATE INDEX IF NOT EXISTS idx_channel_bans_user ON channel_bans(user_id, banned_until);
+  CREATE INDEX IF NOT EXISTS idx_channel_join_requests_channel ON channel_join_requests(channel_id, status, created_at);
+  CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id, joined_at);
+  CREATE INDEX IF NOT EXISTS idx_group_messages_sender ON group_messages(sender_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_group_topics_group ON group_topics(group_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_group_bans_user ON group_bans(user_id, banned_until);
+  CREATE INDEX IF NOT EXISTS idx_group_mutes_user ON group_mutes(user_id, muted_until);
+  CREATE INDEX IF NOT EXISTS idx_group_join_requests_group ON group_join_requests(group_id, status, created_at);
+  CREATE INDEX IF NOT EXISTS idx_group_message_reactions_message ON group_message_reactions(message_id);
+  CREATE INDEX IF NOT EXISTS idx_user_sessions_user_active ON user_sessions(user_id, revoked_at, last_active);
+  CREATE INDEX IF NOT EXISTS idx_push_tokens_user ON push_tokens(user_id, platform);
+  CREATE INDEX IF NOT EXISTS idx_notification_settings_user_scope ON notification_settings(user_id, scope_type, scope_id);
+  CREATE INDEX IF NOT EXISTS idx_saved_items_user ON user_saved_items(user_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_stories_owner_created ON stories(owner_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_story_views_user ON story_views(user_id, viewed_at);
+  CREATE INDEX IF NOT EXISTS idx_premium_purchases_user ON premium_purchases(user_id, status, purchased_at);
 `);
 
 // Ensure Nyx Support bot product/catalog rows exist without requiring manual SQL.

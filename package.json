@@ -11,7 +11,10 @@
     "worker:media": "node src/workers/mediaWorker.js",
     "worker:bot-updates": "node src/workers/botUpdateWorker.js",
     "worker:backups": "node src/workers/backupWorker.js",
-    "workers": "node src/workers/pushWorker.js & node src/workers/mediaWorker.js & node src/workers/botUpdateWorker.js & node src/workers/backupWorker.js"
+    "workers": "node src/workers/pushWorker.js & node src/workers/mediaWorker.js & node src/workers/botUpdateWorker.js & node src/workers/backupWorker.js",
+    "check:syntax": "node scripts/check-server.js",
+    "healthcheck": "node scripts/healthcheck.js",
+    "sqlite:backup": "node scripts/backup-sqlite.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0",
