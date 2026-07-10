@@ -80,9 +80,7 @@ db.exec(`
   -- Каналы — открытое вещание (НЕ E2E, в отличие от личных сообщений выше).
   -- Это сознательное решение: настоящее сквозное шифрование для broadcast
   -- одному сообщению на N произвольных подписчиков требует протокола вроде
-  -- Signal Sender Keys/MLS — отдельная большая система. Telegram устроен
-  -- так же: обычные каналы не E2E, зашифрованы только Secret Chats один-на-один
-  -- (у нас это и есть личные сообщения выше).
+  -- Signal Sender Keys/MLS — отдельная большая система. Обычные broadcast-каналы не являются E2E; E2E применяется к личным/секретным чатам.
   CREATE TABLE IF NOT EXISTS channels (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -287,7 +285,7 @@ for (const sql of migrationColumns) {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Telegram-like backend expansion: channels, groups, bots, sync, media,
+// Nyx backend expansion: channels, groups, bots, sync, media,
 // notifications, stories, premium, privacy and audit logs.
 // These tables are additive and do not break the existing mobile client.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -317,6 +315,9 @@ function addColumnIfMissing(sql) {
   "ALTER TABLE groups ADD COLUMN join_approval_required INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE groups ADD COLUMN protected_content INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE groups ADD COLUMN permissions_json TEXT",
+  "ALTER TABLE groups ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE groups ADD COLUMN username TEXT",
+  "ALTER TABLE groups ADD COLUMN photo_url TEXT",
   "ALTER TABLE groups ADD COLUMN linked_channel_id INTEGER",
   "ALTER TABLE groups ADD COLUMN updated_at TEXT",
   "ALTER TABLE group_messages ADD COLUMN topic_id INTEGER",
@@ -675,7 +676,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_messages_type_created ON messages(message_type, created_at);
   CREATE INDEX IF NOT EXISTS idx_channels_owner ON channels(owner_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_channels_username ON channels(username);
-  CREATE INDEX IF NOT EXISTS idx_channels_public ON channels(is_public, created_at);
+  CREATE INDEX IF NOT EXISTS idx_channels_public ON channels(visibility, created_at);
   CREATE INDEX IF NOT EXISTS idx_channel_subscriptions_user ON channel_subscriptions(user_id, subscribed_at);
   CREATE INDEX IF NOT EXISTS idx_channel_messages_sender ON channel_messages(sender_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_channel_admins_user ON channel_admins(user_id);
@@ -692,7 +693,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_push_tokens_user ON push_tokens(user_id, platform);
   CREATE INDEX IF NOT EXISTS idx_notification_settings_user_scope ON notification_settings(user_id, scope_type, scope_id);
   CREATE INDEX IF NOT EXISTS idx_saved_items_user ON user_saved_items(user_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_stories_owner_created ON stories(owner_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_stories_author_created ON stories(author_type, author_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_story_views_user ON story_views(user_id, viewed_at);
   CREATE INDEX IF NOT EXISTS idx_premium_purchases_user ON premium_purchases(user_id, status, purchased_at);
 `);
