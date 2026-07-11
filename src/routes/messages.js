@@ -140,4 +140,60 @@ router.get('/with/:username', (req, res) => {
   });
 });
 
+
+/**
+ * REST fallback for desktop/web clients.
+ * Stores already encrypted payload exactly like the socket path and emits it to the recipient room.
+ * The server still never receives plaintext.
+ */
+router.post('/send', (req, res) => {
+  try {
+    const { toUsername, recipientUsername, ciphertext, nonce, messageType = 'text', selfDestructSeconds = null } = req.body || {};
+    const targetUsername = toUsername || recipientUsername;
+    if (!targetUsername) return res.status(400).json({ error: 'Получатель не указан' });
+    if (!ciphertext || !nonce) return res.status(400).json({ error: 'Сообщение не зашифровано' });
+
+    const peer = db.prepare('SELECT * FROM users WHERE username = ?').get(targetUsername);
+    if (!peer) return res.status(404).json({ error: 'Получатель не найден' });
+
+    const conversation = getOrCreateConversation(req.userId, peer.id);
+    const info = db
+      .prepare(
+        `INSERT INTO messages
+           (conversation_id, sender_id, ciphertext, nonce, message_type, self_destruct_seconds)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(conversation.id, req.userId, ciphertext, nonce, messageType, selfDestructSeconds);
+
+    const saved = db.prepare('SELECT * FROM messages WHERE id = ?').get(info.lastInsertRowid);
+    const sender = db.prepare('SELECT username FROM users WHERE id = ?').get(req.userId);
+
+    const wire = {
+      id: saved.id,
+      conversationId: conversation.id,
+      senderId: saved.sender_id,
+      senderUsername: sender?.username,
+      ciphertext: saved.ciphertext,
+      nonce: saved.nonce,
+      messageType: saved.message_type,
+      selfDestructSeconds: saved.self_destruct_seconds,
+      createdAt: saved.created_at,
+    };
+
+    const io = req.app.get('io');
+    const roomName = `user:${peer.id}`;
+    if (io) {
+      io.to(roomName).emit('message:new', wire);
+      const recipientRoom = io.sockets.adapter.rooms.get(roomName);
+      if (recipientRoom && recipientRoom.size > 0) {
+        db.prepare("UPDATE messages SET delivered_at = datetime('now') WHERE id = ?").run(saved.id);
+      }
+    }
+
+    res.json({ ok: true, message: wire });
+  } catch (e) {
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  }
+});
+
 module.exports = router;
