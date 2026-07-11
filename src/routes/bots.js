@@ -53,6 +53,42 @@ function enqueueUpdate(botId, type, payload) {
   return info.lastInsertRowid;
 }
 
+
+async function callBotWebhookNow(bot, update) {
+  if (!bot || !bot.webhook_url) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Number(process.env.BOT_WEBHOOK_TIMEOUT_MS || 4500));
+  try {
+    const response = await fetch(bot.webhook_url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Nyx-Bot-Secret': bot.webhook_secret || '',
+        'User-Agent': 'NyxBotRuntime/1.0',
+      },
+      body: JSON.stringify(update),
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const body = await response.json().catch(() => null);
+    const reply = body?.reply || body?.result || body;
+    if (!reply) return null;
+    const text = typeof reply === 'string' ? reply : reply.text;
+    if (!text || !String(text).trim()) return null;
+    return {
+      from: bot.username,
+      text: String(text).slice(0, 4096),
+      replyMarkup: reply.reply_markup || reply.replyMarkup || null,
+      createdAt: new Date().toISOString(),
+      source: 'webhook',
+    };
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 router.use((req, res, next) => {
   if (req.path.startsWith('/api/')) return next();
   return requireAuth(req, res, next);
@@ -156,20 +192,34 @@ router.post('/:id/group-rights/:groupId', (req, res) => {
 });
 
 // Simulate user message to bot for local testing and support bot flow.
-router.post('/:id/incoming', (req, res) => {
+router.post('/:id/incoming', async (req, res) => {
   const bot = db.prepare('SELECT * FROM bots WHERE id = ?').get(Number(req.params.id));
   if (!bot) return res.status(404).json({ error: 'Бот не найден' });
+
+  const sender = db.prepare('SELECT id, username, nickname FROM users WHERE id = ?').get(req.userId) || { id: req.userId };
   const { text, chatId, payload } = req.body || {};
-  const update = { message: { chat: { id: chatId || req.userId, type: 'private' }, from: { id: req.userId }, text: text || '' }, payload };
+  const update = {
+    message: {
+      chat: { id: chatId || req.userId, type: 'private' },
+      from: { id: req.userId, username: sender.username, nickname: sender.nickname },
+      text: text || '',
+      date: Math.floor(Date.now() / 1000),
+    },
+    payload,
+  };
+
   const updateId = enqueueUpdate(bot.id, 'message', update);
-  let reply = null;
+
+  let reply = await callBotWebhookNow(bot, update);
+
   const command = String(text || '').trim().replace(/^\//, '').split(/\s+/)[0];
-  if (command) {
+  if (!reply && command) {
     const cmd = db.prepare('SELECT * FROM bot_commands WHERE bot_id = ? AND command = ?').get(bot.id, command);
-    if (cmd) reply = { from: bot.username, text: cmd.description, createdAt: new Date().toISOString() };
+    if (cmd) reply = { from: bot.username, text: cmd.description, createdAt: new Date().toISOString(), source: 'command_menu' };
   }
-  if (!reply && String(text || '').trim() === '/start') reply = { from: bot.username, text: `Привет. Это ${bot.name}.`, createdAt: new Date().toISOString() };
-  if (!reply && String(text || '').trim() === '/help') reply = { from: bot.username, text: bot.description || 'Команды бота доступны в меню.', createdAt: new Date().toISOString() };
+  if (!reply && String(text || '').trim() === '/start') reply = { from: bot.username, text: `Привет. Это ${bot.name}.`, createdAt: new Date().toISOString(), source: 'built_in' };
+  if (!reply && String(text || '').trim() === '/help') reply = { from: bot.username, text: bot.description || 'Команды бота доступны в меню.', createdAt: new Date().toISOString(), source: 'built_in' };
+
   res.status(201).json({ ok: true, updateId, reply });
 });
 
